@@ -522,8 +522,18 @@ class PowerShellComplete(ShellComplete):
     name: t.ClassVar[str] = "powershell"
     source_template: t.ClassVar[str] = _SOURCE_POWERSHELL
 
+    def source_vars(self) -> _SourceVarsDict:
+        rv = dict(super().source_vars())
+        # A single-quoted PowerShell string is literal except for doubled
+        # inner quotes, so quoting the program name keeps a name or path
+        # that contains spaces intact in ``-CommandName`` and in the call
+        # that invokes the program.
+        quoted = "'{}'".format(self.prog_name.replace("'", "''"))
+        rv["prog_name"] = quoted
+        return rv  # type: ignore[return-value]
+
     def get_completion_args(self) -> tuple[list[str], str]:
-        cwords = split_arg_string(os.environ["COMP_WORDS"])
+        cwords = _split_arg_string_powershell(os.environ["COMP_WORDS"])
         cword = int(os.environ["COMP_CWORD"])
         args = cwords[1:cword]
 
@@ -593,6 +603,103 @@ def get_completion_class(shell: str) -> type[ShellComplete] | None:
     :param shell: Name the class is registered under.
     """
     return _available_shells.get(shell)
+
+
+# Escapes PowerShell recognizes after a backtick. Any other character keeps
+# its own value, which is how PowerShell treats an unknown escape.
+_powershell_escapes: t.Final[cabc.Mapping[str, str]] = {
+    "0": "\0",
+    "a": "\a",
+    "b": "\b",
+    "e": "\x1b",
+    "f": "\f",
+    "n": "\n",
+    "r": "\r",
+    "t": "\t",
+    "v": "\v",
+}
+
+
+def _split_arg_string_powershell(string: str) -> list[str]:
+    """Split an argument string the way PowerShell parses a command line.
+
+    A backslash is an ordinary character here, because it is the Windows path
+    separator; under the POSIX rules of :func:`split_arg_string` it escapes the
+    next character, which turned ``C:\\Users\\me`` into ``C:Usersme`` and made
+    completing a path see the wrong argument. A backtick escapes the next
+    character in a bare word and in a double-quoted string. A single-quoted
+    string is literal, except that two consecutive single quotes are one.
+
+    Variables are not expanded, as completion only needs the typed text.
+
+    .. versionadded:: 8.6.0
+    """
+    out: list[str] = []
+    buf: list[str] = []
+    quote: str | None = None
+    i = 0
+    end = len(string)
+
+    while i < end:
+        char = string[i]
+
+        if quote == "'":
+            if char == "'":
+                if i + 1 < end and string[i + 1] == "'":
+                    buf.append("'")
+                    i += 2
+                    continue
+
+                quote = None
+                i += 1
+                continue
+
+            buf.append(char)
+            i += 1
+            continue
+
+        if quote is not None:  # double quoted
+            if char == "`" and i + 1 < end:
+                escaped = string[i + 1]
+                buf.append(_powershell_escapes.get(escaped, escaped))
+                i += 2
+                continue
+
+            if char == '"':
+                quote = None
+                i += 1
+                continue
+
+            buf.append(char)
+            i += 1
+            continue
+
+        if char in " \t":
+            if buf:
+                out.append("".join(buf))
+                buf.clear()
+
+            i += 1
+            continue
+
+        if char in "'\"":
+            quote = char
+            i += 1
+            continue
+
+        if char == "`" and i + 1 < end:
+            escaped = string[i + 1]
+            buf.append(_powershell_escapes.get(escaped, escaped))
+            i += 2
+            continue
+
+        buf.append(char)
+        i += 1
+
+    if buf:
+        out.append("".join(buf))
+
+    return out
 
 
 def split_arg_string(string: str) -> list[str]:

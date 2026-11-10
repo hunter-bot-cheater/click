@@ -10,6 +10,7 @@ from click.core import Argument
 from click.core import Command
 from click.core import Group
 from click.core import Option
+from click.shell_completion import _split_arg_string_powershell
 from click.shell_completion import add_completion_class
 from click.shell_completion import CompletionItem
 from click.shell_completion import FishComplete
@@ -615,3 +616,49 @@ def test_powershell_format_completion_escapes_help():
     # produced by ZshComplete.
     item = CompletionItem("--at")
     assert pc.format_completion(item) == "plain\n--at\n_"
+
+
+@pytest.mark.parametrize(
+    ("value", "expect"),
+    [
+        # A backslash is the Windows path separator, not an escape character.
+        (r"cli run C:\Users\me\doc", ["cli", "run", r"C:\Users\me\doc"]),
+        ("cli run C:\\Temp\\", ["cli", "run", "C:\\Temp\\"]),
+        (r'cli --dir "C:\Program Files\App"', ["cli", "--dir", r"C:\Program Files\App"]),
+        ("cli 'single quoted path'", ["cli", "single quoted path"]),
+        # Two single quotes inside a single-quoted string are one quote.
+        ("cli 'it''s here'", ["cli", "it's here"]),
+        # A backtick escapes the following character.
+        ('cli "say `"hi`""', ["cli", 'say "hi"']),
+        ("cli tab`ttab", ["cli", "tab\ttab"]),
+        ("cli   spaced   out ", ["cli", "spaced", "out"]),
+    ],
+)
+def test_split_arg_string_powershell(value, expect):
+    """PowerShell quoting rules differ from the POSIX ones used by the other
+    shells: backslashes are literal and a backtick escapes."""
+    assert _split_arg_string_powershell(value) == expect
+
+
+@pytest.mark.usefixtures("_patch_for_completion")
+def test_powershell_get_completion_args_keeps_backslash_paths(monkeypatch):
+    """A Windows path reaches the completion context intact instead of losing
+    its separators to POSIX escape processing."""
+    monkeypatch.setenv("COMP_WORDS", r"cli show C:\Users\me\doc")
+    monkeypatch.setenv("COMP_CWORD", "3")
+    pc = PowerShellComplete(Command("cli"), {}, "cli", "_CLI_COMPLETE")
+    args, incomplete = pc.get_completion_args()
+    assert args == ["show", r"C:\Users\me\doc"]
+    assert incomplete == ""
+
+
+def test_powershell_source_quotes_prog_name():
+    """The program name is quoted, so a name or path containing spaces does
+    not break the generated script."""
+    pc = PowerShellComplete(Command("x"), {}, "my cli", "_MY_CLI_COMPLETE")
+    source = pc.source()
+    assert "-CommandName 'my cli'" in source
+    assert "& 'my cli'" in source
+    # An inner quote is doubled, which is how PowerShell escapes it.
+    pc = PowerShellComplete(Command("x"), {}, "it's", "_IT_COMPLETE")
+    assert "-CommandName 'it''s'" in pc.source()

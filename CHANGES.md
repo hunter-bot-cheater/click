@@ -25,6 +25,11 @@ Unreleased
 - {meth}`CliRunner.invoke` accepts a new `context_settings` argument, to allow
   passing settings to the {class}`Context` of the command which cannot be given as extra
   keyword arguments like `color`. {issue}`2110` {pr}`3896`
+- PowerShell completion splits the command line with PowerShell's quoting rules
+  instead of the POSIX ones the other shells use, so a Windows path such as
+  `C:\\Users\\me` keeps its separators instead of losing them to escape
+  processing. The program name is also quoted in the generated script, which
+  used to break when the name or path contains a space. {issue}`3915`
 
 ## Version 8.5.1
 
